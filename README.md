@@ -106,8 +106,8 @@ from DCArticleCrawler import DCArticleCrawler
 crawler = DCArticleCrawler(
     gallery_id="funnygallery",
     gall_type="main",
-    start_gall_no=1000,
-    end_gall_no=950,
+    start_gall_no=900,
+    end_gall_no=1000,
     is_crawl_comments=False,
     sleep_between_requests=1.0,
     jsonl_path="output/funny_articles.jsonl"
@@ -139,7 +139,6 @@ Each line in the JSONL output is a JSON object with the following structure:
       "text": "text",
       "replies": ["replies"]
     }
-    // …
   ]
 }
 ```
