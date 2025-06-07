@@ -9,6 +9,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 from bs4 import BeautifulSoup
+from bs4 import Tag
 import requests
 
 
@@ -80,10 +81,10 @@ class DCArticleProcessor:
                  gallery_id: str,
                  gall_type: str, # 'main', 'minor', or 'mini'
                  gall_no: int,
-                 headers: Dict[str, str] = None,
+                 headers: Dict[str, str],
+                 driver: webdriver.Chrome,
                  is_crawl_comments: bool = True,
-                 refresh_time_for_comment: float = 0.5,
-                 driver: webdriver.Chrome = None):
+                 refresh_time_for_comment: float = 0.5) -> None:
 
         self.gallery_id = gallery_id
         self.gall_type = gall_type
@@ -110,24 +111,27 @@ class DCArticleProcessor:
         
         # Written date of the article
         try:
-            date = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > div > div.fl > span.gall_date').text
+            date_text = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > div > div.fl > span.gall_date').text # type: ignore
+            date = parse_date(date_text)
+            if date is None:
+                logger.error(f"Failed to parse date for article {self.gall_no}. Skipping...")
+                return None
         except AttributeError:
             logger.info(f"Article {self.gall_no} deleted. Skipping...")
             return None
-        date = parse_date(date)
         
         # header of the article. e.g. [일반]
         try:
-            article_header = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > h3 > span.title_headtext').text
+            article_header = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > h3 > span.title_headtext').text # type: ignore
             article_header = article_header.replace('[', '').replace(']', '')
         except AttributeError:
             article_header = ""
         
         # title of the article
-        title = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > h3 > span.title_subject').text
+        title = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > h3 > span.title_subject').text # type: ignore
         
         try:
-            content = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > div > div.inner.clear > div.writing_view_box > div.write_div').text
+            content = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > div > div.inner.clear > div.writing_view_box > div.write_div').text # type: ignore
             content = content.rstrip()
             content = content.lstrip()
             content = content.replace('- dc official App', '')
@@ -135,9 +139,17 @@ class DCArticleProcessor:
             # No content in article
             content = ""
         
-        recommend = soup.select_one(f'#recommend_view_up_{self.gall_no}').text
-        nonrecommend = soup.select_one(f'#recommend_view_down_{self.gall_no}').text
-        view_count = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > div > div.fr > span.gall_count').text.split(' ')[1]
+        try:
+            recommend = soup.select_one(f'#recommend_view_up_{self.gall_no}').text # type: ignore
+        except AttributeError:
+            recommend = 0
+        
+        try:
+            nonrecommend = soup.select_one(f'#recommend_view_down_{self.gall_no}').text # type: ignore
+        except AttributeError:
+            nonrecommend = 0
+        
+        view_count = soup.select_one('#container > section > article:nth-child(3) > div.view_content_wrap > header > div > div > div.fr > span.gall_count').text.split(' ')[1] # type: ignore
 
         return ArticleExceptComment(
             gall_no=self.gall_no,
@@ -153,7 +165,14 @@ class DCArticleProcessor:
     def crawl_comments(self) -> Optional[List[Dict[str, Union[str, List[str]]]]]:
         """Crawl comments from the article."""
         url = make_url_for_article(self.gall_type, self.gallery_id, self.gall_no)
-        self.driver.get(url)
+
+        max_attempt = 5
+        for i in range(1, max_attempt):
+            try:
+                self.driver.get(url)
+                break
+            except TimeoutException:
+                logger.warning(f"Failed to get url. Retrying... ({i} / {max_attempt})")
         
         try:
             WebDriverWait(self.driver, self.refresh_time_for_comment).until(
@@ -180,8 +199,8 @@ class DCArticleProcessor:
         
         try:
             for top_li in soup.select("ul.cmt_list.add > li[id^='comment_li_']"):
-                cid = top_li["id"].split("_")[-1]
-
+                cid = str(top_li["id"]).split("_")[-1]
+                
                 p = top_li.select_one("p.usertxt.ub-word")
                 text = p.get_text(strip=True) if p else ""
                 if text == "":
@@ -191,7 +210,8 @@ class DCArticleProcessor:
 
                 next_li = top_li.find_next_sibling("li")
                 replies = []
-                if next_li:
+                
+                if next_li and isinstance(next_li, Tag):
                     reply_ul = next_li.select_one(f"ul.reply_list#reply_list_{cid}")
                     if reply_ul:
                         for reply_li in reply_ul.select("li[id^='reply_li_']"):
